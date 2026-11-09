@@ -1,5 +1,22 @@
 # DefectDojo Development Guide
 
+> **FORK NOTICE — read this first.** This file and `.claude/skills/` were written by
+> upstream DefectDojo for contributors working against
+> `github.com/DefectDojo/django-DefectDojo`. This checkout is `ohanze/vulnmgmt`, an
+> independent fork used as the base for a different product (see `/CLAUDE.md` at the
+> repo root — that file governs this fork and supersedes anything below that conflicts
+> with it). In particular:
+> - **Never open a PR, push a branch, or otherwise write to `DefectDojo/django-DefectDojo`
+>   from this fork.** The "Phase 10" stacked-branch plan and any `gh pr create --repo
+>   DefectDojo/django-DefectDojo` instruction below describe upstream's own contribution
+>   workflow, not ours. The `upstream` git remote in this clone is fetch-only
+>   (`push: DISABLE`) specifically to prevent this.
+> - This fork has no long-lived `dev` branch. Treat every mention of `dev` below as
+>   historical/upstream context, not an instruction to create or target one here.
+> - The module layout conventions, parser-authoring rules (`.claude/skills/defectdojo-parser`)
+>   and dev-loop notes (`.claude/skills/defectdojo-dev`) below remain genuinely useful
+>   reference material for working in this codebase and are not superseded.
+
 ## Branch Check (do this before writing any code)
 
 Establish the current branch and its release line *before* editing files, and state

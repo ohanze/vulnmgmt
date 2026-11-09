@@ -1,14 +1,12 @@
 #!/usr/bin/env bash
-# Branch guard — makes the target release line explicit before any code lands.
+# Branch guard — adapted for the ohanze/vulnmgmt fork (see FORK NOTICE in AGENTS.md).
 #
-# DefectDojo has two long-lived branches (see the "Branch Check" section of
-# AGENTS.md):
-#   dev     -> next release, weekly patch or monthly minor  <- all work: fixes, features
-#   master  -> already released                              <- release tasks only
+# This fork has no long-lived `dev` branch; upstream DefectDojo's dev/master release
+# cadence described in AGENTS.md does not apply here. All that remains in force:
+#   master  -> protected, direct edits blocked  <- do feature work on a topic branch
 #
-# Every release is cut from `dev` and merged into `master`; there is no separate
-# patch branch and no hotfix path off `master`. This hook reports the branch before
-# work starts, and hard-blocks edits while on `master`.
+# This hook reports the branch before work starts, and hard-blocks edits while on
+# `master`, so changes land via a topic branch + PR within this fork instead.
 #
 # Three modes, all wired in .claude/settings.json:
 #   session   SessionStart: report the branch and its release line into context.

@@ -160,5 +160,6 @@ MEMORY.md
 !.claude/hooks/
 !.claude/skills/
 .claude/settings.local.json
-CLAUDE.md
+# ohanze/vulnmgmt fork: CLAUDE.md is our tracked, shared project-instructions
+# file (not a personal override) — see docs/adr/0001-base-on-defectdojo.md.
 CLAUDE.local.md
