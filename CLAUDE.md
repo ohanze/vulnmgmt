@@ -33,7 +33,7 @@ Backend	Python 3.14.8 + Django 5.2.17 + DRF 3.18.3	Przewyższa minimum z pierwot
 API schema	drf-spectacular 0.30.0 (+ sidecar)	Już wdrożone. Jest też w toku redesign `api_v3` (zob. `API_V3_PLAN.md` w repo) — sprawdź jego status przed dużymi zmianami API.
 Zadania async	Celery + broker **Valkey** (`valkey/valkey:9.1.2-alpine` w docker-compose)	Zgodne z pierwotnym planem.
 Baza danych	**PostgreSQL 18.6** (domyślny docker-compose, bez MySQL)	Przewyższa minimum (17+). Nie dodawać wsparcia MySQL bez ADR.
-Frontend	**Szablony Django (server-rendered)**, `dojo/templates/` + mały komponent Tailwind/JS w `components/` — **brak SPA React/TS**	Odstępstwo od pierwotnego planu (React 19 + TS + Vite). To jest otwarta decyzja, nie podjęta — zob. TODO poniżej. API (DRF) już istnieje niezależnie od warstwy UI, więc SPA można dobudować później bez zmian backendu.
+Frontend	**Szablony Django (server-rendered)**, `dojo/templates/` + mały komponent Tailwind/JS w `components/` — **brak SPA React/TS, i to jest ostateczna decyzja**	Odstępstwo od pierwotnego planu (React 19 + TS + Vite) — zaakceptowane 2026-11-09, nie wracać do tego bez nowego ADR. Nowe ekrany buduj jako szablony Django wg konwencji `dojo/<domena>/ui/`.
 Auth	Tylko `django.contrib.auth.backends.ModelBackend` (classic auth) w tym checkoucie — **nie potwierdzono SAML/OIDC/LDAP**	Zweryfikuj realnie przed pracą nad RBAC/SSO (mogło zostać usunięte/zrefaktoryzowane albo jest warunkowo importowane — nie jest to potwierdzony fakt, tylko wynik jednego przeglądu).
 Zarządzanie zależnościami	**pip + `requirements.txt`/`requirements-dev.txt`/`requirements-lint.txt`** (NIE Poetry)	Zostajemy przy pip, żeby merge'e z `upstream` (Renovate aktualizuje te pliki) nie generowały wiecznych konfliktów. Nie migrować na Poetry bez bardzo dobrego powodu i ADR.
 Kontenery	`Dockerfile.django-debian`/`-alpine` (python:3.14-slim-trixie / alpine, non-root), `Dockerfile.nginx-*`	Już zgodne z zasadami z §2.
@@ -42,7 +42,7 @@ Observability	Do zweryfikowania — nie sprawdzone w tym przeglądzie
 Jakość (lint)	**Ruff 0.16.10** (`ruff.toml`, target py313) już skonfigurowany. **Brak mypy** w `requirements-lint.txt` — mypy strict z pierwotnego planu nie jest tu wdrożony.	Dodając mypy, ograniczaj zakres do nowych modułów (`dojo/ssvc/`), nie całego `dojo/` — retrofitting na cały istniejący kod to osobny, duży projekt.
 Testy	`unittests/` + `run-unittest.sh`, CI: `unit-tests.yml`, `rest-framework-tests.yml`, `integration-tests.yml`, `performance-tests.yml`	Playwright wspomniany w `.claude/skills/defectdojo-dev` (upstream) — sprawdź jego realny zakres przed poleganiem na nim dla E2E.
 
-TODO (decyzja otwarta, nie podjęta w ADR-0001): frontend. Zostajemy przy szablonach Django na MVP, czy budujemy React/TS SPA na istniejącym DRF API? Zapytaj użytkownika przed dużą inwestycją w jedną z opcji.
+Decyzja frontendowa (2026-11-09): **zostajemy przy szablonach Django** (`dojo/<domena>/ui/`). Nie budujemy React/TS SPA — to odstępstwo od pierwotnego planu jest ostateczne, nie TODO. Nowe ekrany (asset-context, SSVC) implementuj jako szablony Django w konwencji istniejących modułów, nie jako nowy frontend.
 
 Zmiana stosu wymaga ADR. Jeśli aktualny audyt EOL wykaże problem z którąkolwiek pozycją — napraw to jako pierwszy krok.
 
@@ -149,7 +149,7 @@ Python: **Ruff** (`ruff.toml`, już skonfigurowany, target py313) — używaj go
 Logika domenowa (SSVC, dedup, normalizacja) w `services.py`/`queries.py` per domena (konwencja forka, zob. §4), nie w `ui/views.py` ani `api/views.py`; widoki cienkie.
 Migracje Django: zawsze odwracalne gdy to możliwe; brak migracji danych w tej samej migracji co schemat dla dużych tabel.
 Zapytania: pilnuj N+1 (select_related/prefetch_related), indeksy na nowych polach SSVC i FK. Paginacja kursorowa dla list findings — sprawdź, czy istniejąca paginacja DRF już to robi.
-Frontend: zależnie od decyzji TODO w §3 — jeśli szablony Django, trzymaj się istniejących konwencji `dojo/<domena>/ui/`; jeśli SPA, klient API generowany z OpenAPI (drf-spectacular już jest), TypeScript strict, WCAG 2.1 AA, i18n (PL/EN).
+Frontend: szablony Django (§3) — trzymaj się istniejących konwencji `dojo/<domena>/ui/` (`forms.py`/`filters.py`/`views.py`/`urls.py`). WCAG 2.1 AA i i18n (PL/EN) obowiązują też tutaj, zweryfikuj istniejące wsparcie i18n w szablonach przed założeniem, że trzeba je dobudować od zera.
 Commity: Conventional Commits. PR: mały, z testami, z aktualizacją docs/ADR gdy dotyczy. **PR zawsze w ramach `ohanze/vulnmgmt`, nigdy do `upstream`.**
 
 10. Testowanie
@@ -178,7 +178,6 @@ Silnik SSVC (`dojo/ssvc/`) + drzewa CISA/Deployer jako dane, proweniencja, overr
 CI bezpieczeństwa własnego projektu (Trivy, Semgrep, SBOM, pip-audit, gitleaks) — brakuje, dodać jako nowe workflow.
 Weryfikacja/rozszerzenie istniejących parserów pod kątem brakujących formatów (dedykowany Nessus, Rapid7 Nexpose/InsightVM) — dopiero po silniku SSVC, bo większość formatów z §5.1 już jest.
 Customowe raporty pentesterów (szablon, formularz, API) — rozszerzenie istniejącego ręcznego tworzenia findingów.
-Decyzja o frontendzie (TODO w §3) — dopiero gdy SSVC i asset-context są gotowe i widać, czego UI realnie potrzebuje.
 Workflow (SLA, wyjątki — rozszerzenie `Risk_Acceptance`, retest), powiadomienia, raportowanie/eksporty (CSV, SARIF, VEX).
 Hardening, wydajność, dokumentacja operacyjna, Helm (chart już istnieje — dostosować, nie pisać od zera).
 
