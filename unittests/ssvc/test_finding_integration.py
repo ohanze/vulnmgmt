@@ -4,6 +4,9 @@ Testy warstwy integracji silnika SSVC z Finding/Product (CLAUDE.md
 złożenie wejść (build_finding_inputs), ewaluacja end-to-end i
 idempotentny zapis SSVCDecision (compute_and_record).
 """
+import os
+from unittest import mock
+
 from django.utils.timezone import now
 
 from dojo.models import Dojo_User, Engagement, Finding, Product, Product_Type, Test, Test_Type
@@ -56,6 +59,38 @@ class TestFindingIntegration(DojoTestCase):
         self.assertEqual(value, "none")
         self.assertEqual(provenance["source"], "auto:no_kev_match")
         self.assertFalse(needs_review)
+
+    def test_derive_exploitation_epss_above_threshold_gives_poc(self):
+        finding = self._make_finding(known_exploited=False, cve="CVE-2026-3", epss_score=0.15)
+        value, provenance, needs_review = ssvc_services.derive_exploitation(finding)
+        self.assertEqual(value, "poc")
+        self.assertEqual(provenance["source"], "auto:epss_threshold")
+        self.assertEqual(provenance["epss_score"], 0.15)
+        self.assertFalse(needs_review)
+
+    def test_derive_exploitation_epss_below_threshold_with_cve_gives_none(self):
+        finding = self._make_finding(known_exploited=False, cve="CVE-2026-4", epss_score=0.02)
+        value, _provenance, needs_review = ssvc_services.derive_exploitation(finding)
+        self.assertEqual(value, "none")
+        self.assertFalse(needs_review)
+
+    def test_derive_exploitation_known_exploited_wins_over_epss(self):
+        finding = self._make_finding(known_exploited=True, cve="CVE-2026-5", epss_score=0.01)
+        value, provenance, _needs_review = ssvc_services.derive_exploitation(finding)
+        self.assertEqual(value, "active")
+        self.assertEqual(provenance["source"], "auto:known_exploited")
+
+    def test_derive_exploitation_epss_threshold_configurable_via_env(self):
+        finding = self._make_finding(known_exploited=False, cve="CVE-2026-6", epss_score=0.3)
+        with mock.patch.dict(os.environ, {"DD_SSVC_EPSS_POC_THRESHOLD": "0.5"}):
+            value, _provenance, _needs_review = ssvc_services.derive_exploitation(finding)
+        self.assertEqual(value, "none")  # 0.3 < 0.5 z nadpisanym progiem
+
+    def test_derive_exploitation_invalid_threshold_env_falls_back_to_default(self):
+        finding = self._make_finding(known_exploited=False, cve="CVE-2026-7", epss_score=0.3)
+        with mock.patch.dict(os.environ, {"DD_SSVC_EPSS_POC_THRESHOLD": "not-a-float"}):
+            value, _provenance, _needs_review = ssvc_services.derive_exploitation(finding)
+        self.assertEqual(value, "poc")  # 0.3 >= domyslny prog 0.1, zly env nie wywala
 
     def test_derive_exploitation_no_cve_defaults_conservative_and_flags(self):
         """Brak CVE (SAST/DAST/pentest) -> KEV nigdy nie mógł zostać sprawdzony: konserwatywne 'active' + needs_review."""

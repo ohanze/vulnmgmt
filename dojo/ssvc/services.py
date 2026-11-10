@@ -21,12 +21,35 @@ from __future__ import annotations
 
 import functools
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 logger = logging.getLogger(__name__)
+
+# FIRST.org's commonly cited "significantly elevated" EPSS threshold —
+# user-confirmed default (CLAUDE.md §6.2's "EPSS, próg konfigurowalny").
+# Override via DD_SSVC_EPSS_POC_THRESHOLD (float, e.g. "0.05"). Read
+# directly from the environment, not django.conf.settings: this keeps
+# dojo/settings/settings.dist.py untouched (CLAUDE.md §13, minimalna
+# integracja) — one more DD_* var there would be an existing-file edit
+# for a value this module can own and read itself.
+DEFAULT_EPSS_POC_THRESHOLD = 0.1
+
+
+def epss_poc_threshold() -> float:
+    raw = os.environ.get("DD_SSVC_EPSS_POC_THRESHOLD")
+    if raw is None:
+        return DEFAULT_EPSS_POC_THRESHOLD
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid DD_SSVC_EPSS_POC_THRESHOLD=%r, falling back to default %s", raw, DEFAULT_EPSS_POC_THRESHOLD,
+        )
+        return DEFAULT_EPSS_POC_THRESHOLD
 
 TREES_DIR = Path(__file__).resolve().parent / "trees"
 
@@ -124,25 +147,32 @@ def derive_exploitation(finding: Any) -> tuple[str, dict[str, Any], bool]:
     """
     Exploitation from Finding.known_exploited (CLAUDE.md §6.2: map
     known_exploited=True -> Active as the starting point; KEV already
-    populates this field, so no new KEV integration is built here).
+    populates this field, so no new KEV integration is built here) and
+    Finding.epss_score against epss_poc_threshold() for the PoC tier.
 
-    "none" on no KEV match is a legitimate determination *only when the
-    finding has a CVE* — KEV was actually checkable and came back clean,
-    not missing data, so needs_review stays False for that case.
+    "none" on no KEV match and EPSS below threshold is a legitimate
+    determination *only when the finding has a CVE* — both were
+    actually checkable and came back clean/low, not missing data, so
+    needs_review stays False for that case.
 
     A finding with no CVE at all (SAST/DAST/pentest) could never have
-    been checked against KEV in the first place: known_exploited is
-    just its untouched default there. Per §6.4 ("Exploitation i
-    Automatable domyślnie z reguł mapowania... Brak danych ->
-    konserwatywna + flaga, nigdy ciche pominięcie"), that's the
-    conservative-default case, same as derive_automatable/
-    derive_technical_impact below — not the same as a real "none". The
-    per-scanner-type mapping rules §6.4 also describes (confirmed
-    pentest exploit = Active, confirmed Nuclei response = PoC) aren't
-    implemented here, same gap noted on derive_automatable.
+    been checked against KEV or EPSS in the first place: both
+    known_exploited and epss_score are just their untouched defaults
+    there. Per §6.4 ("Exploitation i Automatable domyślnie z reguł
+    mapowania... Brak danych -> konserwatywna + flaga, nigdy ciche
+    pominięcie"), that's the conservative-default case, same as
+    derive_automatable/derive_technical_impact below — not the same as
+    a real "none". The per-scanner-type mapping rules §6.4 also
+    describes (confirmed pentest exploit = Active, confirmed Nuclei
+    response = PoC) aren't implemented here, same gap noted on
+    derive_automatable.
     """
     if finding.known_exploited:
         return "active", {"source": "auto:known_exploited"}, False
+    threshold = epss_poc_threshold()
+    if finding.epss_score is not None and finding.epss_score >= threshold:
+        provenance = {"source": "auto:epss_threshold", "epss_score": finding.epss_score, "threshold": threshold}
+        return "poc", provenance, False
     if finding.cve:
         return "none", {"source": "auto:no_kev_match"}, False
     return "active", {"source": "default:no_cve"}, True
