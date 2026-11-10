@@ -120,20 +120,32 @@ def evaluate(tree: dict[str, Any], values: dict[str, str]) -> dict[str, Any]:
 DEFAULT_TREE_ID = "org_custom_v1"
 
 
-def derive_exploitation(finding: Any) -> tuple[str, dict[str, Any]]:
+def derive_exploitation(finding: Any) -> tuple[str, dict[str, Any], bool]:
     """
     Exploitation from Finding.known_exploited (CLAUDE.md §6.2: map
     known_exploited=True -> Active as the starting point; KEV already
     populates this field, so no new KEV integration is built here).
 
-    "none" on no KEV match is a legitimate determination (no evidence of
-    exploitation), not missing data — this never sets needs_review. A
-    PoC tier would need EPSS/public-exploit signals with a configurable
-    threshold (§6.2), which doesn't exist yet; not invented here.
+    "none" on no KEV match is a legitimate determination *only when the
+    finding has a CVE* — KEV was actually checkable and came back clean,
+    not missing data, so needs_review stays False for that case.
+
+    A finding with no CVE at all (SAST/DAST/pentest) could never have
+    been checked against KEV in the first place: known_exploited is
+    just its untouched default there. Per §6.4 ("Exploitation i
+    Automatable domyślnie z reguł mapowania... Brak danych ->
+    konserwatywna + flaga, nigdy ciche pominięcie"), that's the
+    conservative-default case, same as derive_automatable/
+    derive_technical_impact below — not the same as a real "none". The
+    per-scanner-type mapping rules §6.4 also describes (confirmed
+    pentest exploit = Active, confirmed Nuclei response = PoC) aren't
+    implemented here, same gap noted on derive_automatable.
     """
     if finding.known_exploited:
-        return "active", {"source": "auto:known_exploited"}
-    return "none", {"source": "auto:no_kev_match"}
+        return "active", {"source": "auto:known_exploited"}, False
+    if finding.cve:
+        return "none", {"source": "auto:no_kev_match"}, False
+    return "active", {"source": "default:no_cve"}, True
 
 
 def _cvss3_metrics(cvssv3_vector: str | None) -> dict[str, str] | None:
@@ -195,17 +207,19 @@ def build_finding_inputs(finding: Any) -> tuple[dict[str, str], dict[str, dict[s
     (values, provenance, needs_review) for evaluate(), for one Finding.
 
     Exposure/Mission Impact/Safety Impact come from
-    finding.test.engagement.product.effective_ssvc_* (Product >
-    Product_Type > conservative default — dojo/product/models.py).
-    An unverified asset context (Product.ssvc_context_verified=False)
-    folds into needs_review here too, so "this decision rests on an
-    unconfirmed asset guess" is visible on the SSVCDecision itself, per
-    §6.3's "flagę 'niezweryfikowane', widoczną na decyzji SSVC" — not
-    just on the Product.
+    finding.test.engagement.product.ssvc_asset_context() (Product >
+    Product_Type > conservative default, each resolved once —
+    dojo/product/models.py). An unverified asset context
+    (Product.ssvc_context_verified=False) folds into needs_review here
+    too, so "this decision rests on an unconfirmed asset guess" is
+    visible on the SSVCDecision itself, per §6.3's "flagę
+    'niezweryfikowane', widoczną na decyzji SSVC" — not just on the
+    Product.
     """
     product = finding.test.engagement.product
+    asset_context = product.ssvc_asset_context()
 
-    exploitation, exploitation_prov = derive_exploitation(finding)
+    exploitation, exploitation_prov, exploitation_needs_review = derive_exploitation(finding)
     automatable, automatable_prov, automatable_needs_review = derive_automatable(finding)
     technical_impact, technical_impact_prov, technical_impact_needs_review = derive_technical_impact(finding)
 
@@ -213,20 +227,21 @@ def build_finding_inputs(finding: Any) -> tuple[dict[str, str], dict[str, dict[s
         "exploitation": exploitation,
         "automatable": automatable,
         "technical_impact": technical_impact,
-        "exposure": product.effective_ssvc_exposure,
-        "mission_impact": product.effective_ssvc_mission_impact,
-        "safety_impact": product.effective_ssvc_safety_impact,
+        "exposure": asset_context["exposure"],
+        "mission_impact": asset_context["mission_impact"],
+        "safety_impact": asset_context["safety_impact"],
     }
     provenance = {
         "exploitation": exploitation_prov,
         "automatable": automatable_prov,
         "technical_impact": technical_impact_prov,
-        "exposure": {"source": product.effective_ssvc_exposure_source},
-        "mission_impact": {"source": product.effective_ssvc_mission_impact_source},
-        "safety_impact": {"source": product.effective_ssvc_safety_impact_source},
+        "exposure": {"source": asset_context["exposure_source"]},
+        "mission_impact": {"source": asset_context["mission_impact_source"]},
+        "safety_impact": {"source": asset_context["safety_impact_source"]},
     }
     needs_review = (
-        automatable_needs_review
+        exploitation_needs_review
+        or automatable_needs_review
         or technical_impact_needs_review
         or not product.ssvc_context_verified
     )

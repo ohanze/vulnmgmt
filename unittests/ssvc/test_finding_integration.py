@@ -43,16 +43,27 @@ class TestFindingIntegration(DojoTestCase):
     # -- derive_exploitation --------------------------------------------
 
     def test_derive_exploitation_known_exploited(self):
-        finding = self._make_finding(known_exploited=True)
-        value, provenance = ssvc_services.derive_exploitation(finding)
+        finding = self._make_finding(known_exploited=True, cve="CVE-2026-1")
+        value, provenance, needs_review = ssvc_services.derive_exploitation(finding)
         self.assertEqual(value, "active")
         self.assertEqual(provenance["source"], "auto:known_exploited")
+        self.assertFalse(needs_review)
 
-    def test_derive_exploitation_no_kev_match(self):
-        finding = self._make_finding(known_exploited=False)
-        value, provenance = ssvc_services.derive_exploitation(finding)
+    def test_derive_exploitation_no_kev_match_with_cve(self):
+        """CVE jest, ale brak w KEV -> realne 'none', nie brakujące dane."""
+        finding = self._make_finding(known_exploited=False, cve="CVE-2026-2")
+        value, provenance, needs_review = ssvc_services.derive_exploitation(finding)
         self.assertEqual(value, "none")
         self.assertEqual(provenance["source"], "auto:no_kev_match")
+        self.assertFalse(needs_review)
+
+    def test_derive_exploitation_no_cve_defaults_conservative_and_flags(self):
+        """Brak CVE (SAST/DAST/pentest) -> KEV nigdy nie mógł zostać sprawdzony: konserwatywne 'active' + needs_review."""
+        finding = self._make_finding(known_exploited=False, cve=None)
+        value, provenance, needs_review = ssvc_services.derive_exploitation(finding)
+        self.assertEqual(value, "active")
+        self.assertEqual(provenance["source"], "default:no_cve")
+        self.assertTrue(needs_review)
 
     # -- derive_automatable ------------------------------------------------
 
@@ -153,7 +164,7 @@ class TestFindingIntegration(DojoTestCase):
         self.assertEqual(SSVCDecision.objects.filter(finding=finding).count(), 1)
 
     def test_compute_and_record_creates_new_row_when_inputs_change(self):
-        finding = self._make_finding(cvssv3=CVSS_AUTOMATABLE_TOTAL, known_exploited=False)
+        finding = self._make_finding(cvssv3=CVSS_AUTOMATABLE_TOTAL, known_exploited=False, cve="CVE-2026-3")
         decision1, _ = ssvc_services.compute_and_record(finding)
 
         finding.known_exploited = True

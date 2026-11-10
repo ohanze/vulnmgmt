@@ -276,6 +276,25 @@ class Product(BaseModel):
     def effective_ssvc_safety_impact_source(self):
         return self._resolve_ssvc_field("ssvc_safety_impact", ssvc_constants.SAFETY_IMPACT_DEFAULT)[1]
 
+    def ssvc_asset_context(self):
+        """
+        All three (value, source) resolutions in one call — each field
+        resolved exactly once. dojo.ssvc.services.build_finding_inputs()
+        uses this instead of the six effective_ssvc_*/_source properties
+        above (which each independently re-run _resolve_ssvc_field; fine
+        for a one-off read, wasteful at Celery-recalculation scale).
+        """
+        exposure, exposure_source = self._resolve_ssvc_field("ssvc_exposure", ssvc_constants.EXPOSURE_DEFAULT)
+        mission_impact, mission_impact_source = self._resolve_ssvc_field(
+            "ssvc_mission_impact", ssvc_constants.MISSION_IMPACT_DEFAULT)
+        safety_impact, safety_impact_source = self._resolve_ssvc_field(
+            "ssvc_safety_impact", ssvc_constants.SAFETY_IMPACT_DEFAULT)
+        return {
+            "exposure": exposure, "exposure_source": exposure_source,
+            "mission_impact": mission_impact, "mission_impact_source": mission_impact_source,
+            "safety_impact": safety_impact, "safety_impact_source": safety_impact_source,
+        }
+
     @cached_property
     def findings_count(self):
         from dojo.models import Finding  # noqa: PLC0415 -- lazy import, avoids circular dependency
