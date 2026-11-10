@@ -1,20 +1,32 @@
 """SSVC decision engine: (tree, decision point values) -> decision.
 
-Deliberately framework-agnostic: no Django imports. Trees are data
-(dojo/ssvc/trees/*.yaml); this module only resolves them. Persistence of
-the result as an immutable SSVCDecision record, provenance capture, and
-recalculation triggers are a separate concern (dojo/ssvc/models.py /
-signals.py, not yet built) — evaluate() just answers one question:
-given this tree version and these inputs, what's the outcome.
+Two layers in this one file (one services.py per domain, per CLAUDE.md
+§4 — not split further):
+
+1. The tree evaluator (load_tree/evaluate/derive_criticality below) is
+   deliberately framework-agnostic: no Django imports anywhere in it.
+   Trees are data (dojo/ssvc/trees/*.yaml); it only resolves them.
+
+2. The Finding-integration layer (derive_exploitation and friends,
+   build_finding_inputs, evaluate_finding, compute_and_record) *does*
+   read Django models (Finding, Product) and writes SSVCDecision rows —
+   that's unavoidable, it's the glue CLAUDE.md §6.2/§6.4/§6.5 describes.
+   It imports Django/dojo.models lazily, inside each function, matching
+   the rest of this codebase's convention for domain services (avoids
+   circular imports; dojo.ssvc.services itself is importable before the
+   app registry is ready, same as before this layer existed).
 """
 
 from __future__ import annotations
 
 import functools
+import logging
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+logger = logging.getLogger(__name__)
 
 TREES_DIR = Path(__file__).resolve().parent / "trees"
 
@@ -95,3 +107,188 @@ def evaluate(tree: dict[str, Any], values: dict[str, str]) -> dict[str, Any]:
         f"exploitation={values['exploitation']!r}, automatable={values['automatable']!r}, "
         f"technical_impact={values['technical_impact']!r}, exposure={values['exposure']!r}",
     )
+
+
+# ---------------------------------------------------------------------------
+# Finding integration (CLAUDE.md §6.2/§6.4): derive the three Finding-level
+# decision points from data already on Finding, plus the three asset-level
+# ones from its Product. "Brak danych -> wartość konserwatywna + flaga, nigdy
+# ciche pominięcie" (§6.4) — every derive_* below returns a needs_review bit
+# precisely for the "we had to guess" case, never silently.
+# ---------------------------------------------------------------------------
+
+DEFAULT_TREE_ID = "org_custom_v1"
+
+
+def derive_exploitation(finding: Any) -> tuple[str, dict[str, Any]]:
+    """
+    Exploitation from Finding.known_exploited (CLAUDE.md §6.2: map
+    known_exploited=True -> Active as the starting point; KEV already
+    populates this field, so no new KEV integration is built here).
+
+    "none" on no KEV match is a legitimate determination (no evidence of
+    exploitation), not missing data — this never sets needs_review. A
+    PoC tier would need EPSS/public-exploit signals with a configurable
+    threshold (§6.2), which doesn't exist yet; not invented here.
+    """
+    if finding.known_exploited:
+        return "active", {"source": "auto:known_exploited"}
+    return "none", {"source": "auto:no_kev_match"}
+
+
+def _cvss3_metrics(cvssv3_vector: str | None) -> dict[str, str] | None:
+    """{"AV": "N", "AC": "L", ...} from a cvssv3 vector string, or None if unusable."""
+    if not cvssv3_vector:
+        return None
+    from cvss import CVSS3  # noqa: PLC0415 -- lazy import, see module docstring
+
+    try:
+        return CVSS3(cvssv3_vector).metrics
+    except Exception:
+        logger.warning("Could not parse cvssv3 vector for SSVC derivation: %r", cvssv3_vector)
+        return None
+
+
+def derive_automatable(finding: Any) -> tuple[str, dict[str, Any], bool]:
+    """
+    Automatable from the CVSSv3 vector (CLAUDE.md §6.2: AV:N, AC:L, PR:N,
+    UI:N -> Yes). Only cvssv3 is read — cvssv4 uses a different metric
+    set (AT, VC/VI/VA, ...) and isn't mapped here, that's a gap, not an
+    oversight.
+
+    No usable CVSSv3 vector (no CVE, e.g. SAST/DAST/pentest findings) ->
+    conservative "yes" + needs_review=True. §6.4 also describes
+    per-scanner-type heuristics (confirmed exploit in a pentest, a
+    Nuclei finding with a confirmed response) — not implemented: there's
+    no verified Finding field yet that reliably encodes "confirmed" for
+    those tools, and CLAUDE.md's own rule is not to invent that mapping.
+    """
+    metrics = _cvss3_metrics(finding.cvssv3)
+    if metrics is None:
+        return "yes", {"source": "default:no_cvss3_vector"}, True
+    required_metrics = (("AV", "N"), ("AC", "L"), ("PR", "N"), ("UI", "N"))
+    automatable = all(metrics.get(k) == expected for k, expected in required_metrics)
+    provenance = {"source": "auto:cvssv3_vector", "vector": finding.cvssv3}
+    return ("yes" if automatable else "no"), provenance, False
+
+
+def derive_technical_impact(finding: Any) -> tuple[str, dict[str, Any], bool]:
+    """
+    Technical Impact from the CVSSv3 vector's C/I/A metrics (CLAUDE.md
+    §6.2): any of Confidentiality/Integrity/Availability = High -> Total.
+    Same cvssv3-only, same no-CWE-heuristic limitations as
+    derive_automatable above (no concrete CWE->impact rule is given in
+    CLAUDE.md to implement).
+
+    No usable vector -> conservative "total" + needs_review=True.
+    """
+    metrics = _cvss3_metrics(finding.cvssv3)
+    if metrics is None:
+        return "total", {"source": "default:no_cvss3_vector"}, True
+    total = metrics.get("C") == "H" or metrics.get("I") == "H" or metrics.get("A") == "H"
+    provenance = {"source": "auto:cvssv3_vector", "vector": finding.cvssv3}
+    return ("total" if total else "partial"), provenance, False
+
+
+def build_finding_inputs(finding: Any) -> tuple[dict[str, str], dict[str, dict[str, Any]], bool]:
+    """
+    (values, provenance, needs_review) for evaluate(), for one Finding.
+
+    Exposure/Mission Impact/Safety Impact come from
+    finding.test.engagement.product.effective_ssvc_* (Product >
+    Product_Type > conservative default — dojo/product/models.py).
+    An unverified asset context (Product.ssvc_context_verified=False)
+    folds into needs_review here too, so "this decision rests on an
+    unconfirmed asset guess" is visible on the SSVCDecision itself, per
+    §6.3's "flagę 'niezweryfikowane', widoczną na decyzji SSVC" — not
+    just on the Product.
+    """
+    product = finding.test.engagement.product
+
+    exploitation, exploitation_prov = derive_exploitation(finding)
+    automatable, automatable_prov, automatable_needs_review = derive_automatable(finding)
+    technical_impact, technical_impact_prov, technical_impact_needs_review = derive_technical_impact(finding)
+
+    values = {
+        "exploitation": exploitation,
+        "automatable": automatable,
+        "technical_impact": technical_impact,
+        "exposure": product.effective_ssvc_exposure,
+        "mission_impact": product.effective_ssvc_mission_impact,
+        "safety_impact": product.effective_ssvc_safety_impact,
+    }
+    provenance = {
+        "exploitation": exploitation_prov,
+        "automatable": automatable_prov,
+        "technical_impact": technical_impact_prov,
+        "exposure": {"source": product.effective_ssvc_exposure_source},
+        "mission_impact": {"source": product.effective_ssvc_mission_impact_source},
+        "safety_impact": {"source": product.effective_ssvc_safety_impact_source},
+    }
+    needs_review = (
+        automatable_needs_review
+        or technical_impact_needs_review
+        or not product.ssvc_context_verified
+    )
+    return values, provenance, needs_review
+
+
+def evaluate_finding(finding: Any, *, tree_id: str = DEFAULT_TREE_ID) -> dict[str, Any]:
+    """Compute (does not persist) a full SSVC decision dict for one Finding."""
+    tree = load_tree(tree_id)
+    values, provenance, needs_review = build_finding_inputs(finding)
+    result = evaluate(tree, values)
+    result["provenance"] = provenance
+    result["needs_review"] = needs_review
+    return result
+
+
+def compute_and_record(finding: Any, *, tree_id: str = DEFAULT_TREE_ID) -> tuple[Any, bool]:
+    """
+    Evaluate `finding` and persist a new SSVCDecision — but only if its
+    inputs or outcome differ from the most recent existing decision for
+    this Finding (CLAUDE.md §6.5: recalculation is idempotent). Returns
+    (decision, created); created=False means the existing latest record
+    was returned untouched, no row was written.
+
+    No Celery task calls this yet (the recalculation triggers in §6.5 —
+    new finding, Product attribute change, KEV/EPSS update, tree version
+    change, override expiry — aren't wired up); this is the synchronous
+    entrypoint a future task would call per finding_id.
+    """
+    from dojo.ssvc.models import SSVCDecision  # noqa: PLC0415 -- lazy import, see module docstring
+
+    result = evaluate_finding(finding, tree_id=tree_id)
+    inputs = result["inputs"]
+
+    latest = finding.ssvc_decisions.first()  # Meta.ordering = ("-created",)
+    if (
+        latest is not None
+        and latest.tree_id == result["tree_id"]
+        and latest.tree_version == result["tree_version"]
+        and latest.outcome == result["outcome"]
+        and latest.exploitation == inputs["exploitation"]
+        and latest.automatable == inputs["automatable"]
+        and latest.technical_impact == inputs["technical_impact"]
+        and latest.exposure == inputs["exposure"]
+        and latest.mission_impact == inputs["mission_impact"]
+        and latest.safety_impact == inputs["safety_impact"]
+    ):
+        return latest, False
+
+    decision = SSVCDecision.objects.create(
+        finding=finding,
+        tree_id=result["tree_id"],
+        tree_version=result["tree_version"],
+        exploitation=inputs["exploitation"],
+        automatable=inputs["automatable"],
+        technical_impact=inputs["technical_impact"],
+        exposure=inputs["exposure"],
+        mission_impact=inputs["mission_impact"],
+        safety_impact=inputs["safety_impact"],
+        criticality=result["criticality"],
+        outcome=result["outcome"],
+        provenance=result["provenance"],
+        needs_review=result["needs_review"],
+    )
+    return decision, True

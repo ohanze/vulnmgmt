@@ -236,32 +236,45 @@ class Product(BaseModel):
     def get_absolute_url(self):
         return reverse("view_product", args=[str(self.id)])
 
+    def _resolve_ssvc_field(self, field_name, default):
+        """
+        (wartość, źródło) dla jednego pola SSVC: ten Produkt -> jego Product_Type ->
+        konserwatywny domyślny. źródło to "product"/"product_type"/"default" — potrzebne
+        do proweniencji w SSVCDecision.provenance (dojo.ssvc.services), nie tylko do
+        samej wartości.
+        """
+        own = getattr(self, field_name)
+        if own:
+            return own, "product"
+        if self.prod_type_id:
+            inherited = getattr(self.prod_type, field_name)
+            if inherited:
+                return inherited, "product_type"
+        return default, "default"
+
     @property
     def effective_ssvc_exposure(self):
-        """Ekspozycja: ten Produkt -> jego Product_Type -> konserwatywny domyślny."""
-        if self.ssvc_exposure:
-            return self.ssvc_exposure
-        if self.prod_type_id and self.prod_type.ssvc_exposure:
-            return self.prod_type.ssvc_exposure
-        return ssvc_constants.EXPOSURE_DEFAULT
+        return self._resolve_ssvc_field("ssvc_exposure", ssvc_constants.EXPOSURE_DEFAULT)[0]
+
+    @property
+    def effective_ssvc_exposure_source(self):
+        return self._resolve_ssvc_field("ssvc_exposure", ssvc_constants.EXPOSURE_DEFAULT)[1]
 
     @property
     def effective_ssvc_mission_impact(self):
-        """Wpływ na misję: ten Produkt -> jego Product_Type -> konserwatywny domyślny."""
-        if self.ssvc_mission_impact:
-            return self.ssvc_mission_impact
-        if self.prod_type_id and self.prod_type.ssvc_mission_impact:
-            return self.prod_type.ssvc_mission_impact
-        return ssvc_constants.MISSION_IMPACT_DEFAULT
+        return self._resolve_ssvc_field("ssvc_mission_impact", ssvc_constants.MISSION_IMPACT_DEFAULT)[0]
+
+    @property
+    def effective_ssvc_mission_impact_source(self):
+        return self._resolve_ssvc_field("ssvc_mission_impact", ssvc_constants.MISSION_IMPACT_DEFAULT)[1]
 
     @property
     def effective_ssvc_safety_impact(self):
-        """Wpływ na bezpieczeństwo: ten Produkt -> jego Product_Type -> konserwatywny domyślny."""
-        if self.ssvc_safety_impact:
-            return self.ssvc_safety_impact
-        if self.prod_type_id and self.prod_type.ssvc_safety_impact:
-            return self.prod_type.ssvc_safety_impact
-        return ssvc_constants.SAFETY_IMPACT_DEFAULT
+        return self._resolve_ssvc_field("ssvc_safety_impact", ssvc_constants.SAFETY_IMPACT_DEFAULT)[0]
+
+    @property
+    def effective_ssvc_safety_impact_source(self):
+        return self._resolve_ssvc_field("ssvc_safety_impact", ssvc_constants.SAFETY_IMPACT_DEFAULT)[1]
 
     @cached_property
     def findings_count(self):
