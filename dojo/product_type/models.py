@@ -3,9 +3,11 @@ from django.contrib.postgres.search import SearchVector
 from django.db import models
 from django.urls import reverse
 from django.utils.functional import cached_property
+from django.utils.translation import gettext as _
 
 from dojo.base_models.base import BaseManager, BaseModel
 from dojo.query_hooks import HookedBaseManager
+from dojo.ssvc import constants as ssvc_constants
 
 
 class Product_Type(BaseModel):
@@ -25,6 +27,27 @@ class Product_Type(BaseModel):
     critical_product = models.BooleanField(default=False)
     key_product = models.BooleanField(default=False)
     authorized_users = models.ManyToManyField("dojo.Dojo_User", related_name="authorized_product_types", blank=True)
+
+    # Domyślne SSVC dla assetów (Product) tego typu, które nie ustawiły
+    # własnych wartości — patrz Product.effective_ssvc_*. Puste (None) =
+    # brak domyślnej organizacyjnej; Product i tak spadnie na konserwatywny
+    # domyślny z dojo.ssvc.constants.
+    ssvc_exposure = models.CharField(
+        max_length=10, choices=[(v, _(label)) for v, label in ssvc_constants.EXPOSURE_CHOICES],
+        null=True, blank=True,
+        verbose_name=_("Domyślna ekspozycja sieciowa (SSVC)"),
+        help_text=_("Domyślna wartość dla produktów tego typu, które nie ustawiły własnej ekspozycji."))
+    ssvc_mission_impact = models.CharField(
+        max_length=10, choices=[(v, _(label)) for v, label in ssvc_constants.MISSION_IMPACT_CHOICES],
+        null=True, blank=True,
+        verbose_name=_("Domyślny wpływ na misję (SSVC)"),
+        help_text=_("Domyślna wartość dla produktów tego typu, które nie ustawiły własnego wpływu na misję."))
+    ssvc_safety_impact = models.CharField(
+        max_length=11, choices=[(v, _(label)) for v, label in ssvc_constants.SAFETY_IMPACT_CHOICES],
+        null=True, blank=True,
+        verbose_name=_("Domyślny wpływ na bezpieczeństwo (SSVC)"),
+        help_text=_(
+            "Domyślna wartość dla produktów tego typu, które nie ustawiły własnego wpływu na bezpieczeństwo."))
 
     # Read and written only by plugins; open source never sets them.
     archived_at = models.DateTimeField(null=True, blank=True, editable=False)
