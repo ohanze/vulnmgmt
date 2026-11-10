@@ -9,7 +9,7 @@ Platforma do zarządzania podatnościami (budowana jako fork DefectDojo, nie od 
 Przyjmuje wyniki skanów z wielu narzędzi (Nessus, Trivy, Nuclei, Semgrep, Burp Suite, ZAP, OpenVAS itd.) oraz customowe raporty pentesterów.
 Normalizuje i deduplikuje findings do wspólnego modelu (DefectDojo już to robi dla swoich ~369 parserów — rozszerzamy, nie zastępujemy).
 Automatyzuje analizę drzewa decyzyjnego SSVC (Stakeholder-Specific Vulnerability Categorization, CERT/CC + CISA) i zwraca rekomendowaną akcję oraz priorytet. **To jest główny nowy komponent — DefectDojo (i konkurencyjne SecObserve, odrzucone w ADR-0001) nie implementuje SSVC; oba sprowadzają priorytetyzację do severity/CVSS/EPSS.**
-Pozwala opisać systemy (assety): ekspozycja, wpływ na biznes, wpływ na bezpieczeństwo — te dane zasilają SSVC. Model `Product` w DefectDojo nie ma tych atrybutów — trzeba je dodać.
+Pozwala opisać systemy (assety): ekspozycja, wpływ na biznes, wpływ na bezpieczeństwo — te dane zasilają SSVC. **Stan 2026-11-10: dodane na branchu `feature/ssvc-engine` (niezmergowany do `master`)** — zob. §4 "Model domenowy" i §12.
 Prowadzi pełny audyt i workflow (triage, przypisanie, SLA, wyjątki, retest, zamknięcie) — częściowo już istnieje (`Risk_Acceptance` z wygasaniem i zatwierdzającym), do rozszerzenia o powiązanie z SSVC.
 Poza zakresem (na start): aktywne skanowanie we własnym zakresie, agent na hostach, zarządzanie patchami.
 
@@ -63,19 +63,20 @@ dojo/
 
 Istniejące domeny istotne dla nas: `product_type/`, `product/`, `engagement/`, `test/`, `finding/`, `endpoint/`, `risk_acceptance/`, `vulnerability/`, `finding_group/`, `tools/` (parsery), `jira/`, `authorization/`, `auditlog/`.
 
-Nowe moduły, które musimy dobudować, mają trzymać się tej samej konwencji, nie `apps/` z pierwotnego planu:
-- `dojo/ssvc/` — silnik SSVC (drzewa jako dane, decyzje, proweniencja, override).
-- Rozszerzenie `dojo/product/models.py` — pola Exposure/Mission Impact/Safety Impact.
-- Rozszerzenie `dojo/finding/models.py` lub nowy moduł — pola Automatable/Technical Impact tam, gdzie nie da się ich wyprowadzić z istniejących `cvssv3`/`cwe`.
-- Rozszerzenie `dojo/risk_acceptance/` — powiązanie z `SSVCDecision` tam gdzie ma to sens, zamiast nowej, równoległej encji Exception.
+Nowe moduły, dobudowane zgodnie z tą konwencją (stan 2026-11-10, branch `feature/ssvc-engine`, **niezmergowany do `master`** — sprawdź `git log`/`git branch` zanim założysz, które z tego jest już na `master`):
+- `dojo/ssvc/` — **gotowe**: silnik (`services.py`, czysta funkcja `evaluate()`), drzewo jako dane (`trees/org_custom_v1.yaml`, transkrypcja `tree_source.md`), model `SSVCDecision` (niemutowalny rekord historii), `admin.py`. Zob. `DEFECTDOJO_MODIFICATIONS.md` dla pełnej listy zmian w plikach DefectDojo, które to wymagało.
+- `dojo/product/models.py` — **gotowe**: pola `ssvc_exposure`/`ssvc_mission_impact`/`ssvc_safety_impact` (nullable) + `ssvc_context_verified` (bool) + `effective_ssvc_*`/`*_source` properties + `ssvc_asset_context()` (dziedziczenie Product → Product_Type → konserwatywny domyślny).
+- `dojo/product_type/models.py` — **gotowe**: te same 3 pola jako domyślne organizacyjne.
+- Automatable/Technical Impact — **decyzja projektowa**: NIE są polami na `Finding` (nie trzeba migracji `Finding`). Wyliczane w locie w `dojo/ssvc/services.py` (`derive_automatable`/`derive_technical_impact`) z wektora CVSSv3 (`finding.cvssv3`, biblioteka `cvss`), z konserwatywnym fallbackiem + `needs_review` gdy brak wektora. Tylko `cvssv3` jest czytane, nie `cvssv4` (inne nazwy metryk) — to świadomy gap, nie przeoczenie.
+- Rozszerzenie `dojo/risk_acceptance/` — **nie zrobione**, wciąż do zrobienia.
 
 Model domenowy — co już istnieje w `dojo/finding/models.py`, `dojo/product/models.py`, `dojo/risk_acceptance/models.py` (zweryfikowane):
 - `Product_Type → Product → Engagement → Test → Finding` (hierarchia FK).
 - `Finding`: `severity` (Critical/High/Medium/Low/Info), `cvssv3`/`cvssv3_score`, `cvssv4`/`cvssv4_score`, `cve`, `cwe`, `epss_score`, `epss_percentile`, **`known_exploited`** (to jest KEV!), `kev_date`, `ransomware_used`, `fix_available`/`fix_version`, `severity_justification`, flagi `active`/`verified`/`false_p`/`duplicate`(+`duplicate_finding`)/`out_of_scope`/`risk_accepted`/`is_mitigated`.
 - `Risk_Acceptance`: `accepted_findings` (M2M), `recommendation`/`decision` (Accept/Avoid/Mitigate/Fix/Transfer), `accepted_by`, `owner`, `expiration_date`(+`expiration_date_warned`/`handled`), `reactivate_expired`, `path` (dowód).
-- **Zero pól SSVC** (`ssvc`, `exposure`, `mission_impact`, `automatable`, `technical_impact` — żadne nie istnieją). To jest cała nasza praca domenowa.
+- Pola SSVC na `Product`/`Product_Type` — zob. wyżej (stan 2026-11-10, branch `feature/ssvc-engine`).
 
-`SSVCDecision` jako niemutowalny rekord historii (wersja drzewa, punkty decyzyjne, proweniencja, wynik, timestamp) — to nowa encja, osobna tabela, niezależnie od tego czy linkujemy ją do `Risk_Acceptance`.
+`SSVCDecision` (`dojo/ssvc/models.py`) — **gotowe**: niemutowalny rekord historii (FK do `Finding`, wersja drzewa, 6 wartości punktów decyzyjnych, `provenance` JSONField per punkt, `criticality`/`outcome`, `needs_review`, `created`). `save()`/`delete()` rzucają na próbę zmiany/usunięcia — immutability wymuszona w kodzie, nie tylko konwencją. Nie linkowana (jeszcze) do `Risk_Acceptance`.
 
 Findings z narzędzi bez CVE (Semgrep, Burp, Nuclei custom templates, pentest) są pełnoprawne — SSVC musi działać też dla nich (patrz §6.4). `Finding.cwe` już istnieje jako fallback dla Technical Impact.
 
@@ -107,25 +108,31 @@ Obsługiwane drzewa (konfigurowalne per organizacja): CISA (Track / Track* / Att
 Każda decyzja zapisuje wersję drzewa i proweniencję każdego punktu decyzyjnego. Zmiana drzewa nie przepisuje historii — powoduje przeliczenie i nowy rekord.
 Ręczny override punktu decyzyjnego jest możliwy, wymaga uzasadnienia, ma opcjonalny termin ważności i trafia do audytu (`dojo/auditlog/` już istnieje — użyj go, nie buduj nowego audytu).
 6.2 Punkty decyzyjne i źródła danych
-Punkt decyzyjny	Wartości	Źródło	Co już jest w `Finding`
-Exploitation	None / PoC / Active	CISA KEV, EPSS (próg konfigurowalny), CISA Vulnrichment, publiczne exploity, ręczny override	`known_exploited` + `kev_date` już istnieją — mapuj `known_exploited=True` → `Active` jako punkt wyjścia, nie buduj integracji KEV od zera.
-Automatable	No / Yes	CISA Vulnrichment; heurystyka z wektora CVSS (AV:N, AC:L, PR:N, UI:N); ręcznie dla findings bez CVE	Brak pola — nowe.
-Technical Impact	Partial / Total	CISA Vulnrichment; CVSS (C/I/A), CWE; ręcznie	`cvssv3`/`cvssv4` i `cwe` już istnieją jako wejście do heurystyki.
-Exposure (asset)	Small / Controlled / Open	Dane assetu (`Product`) — wprowadza użytkownik	Brak pola na `Product` — nowe.
-Mission Impact / Mission Prevalence (asset)	Minimal / Support / Essential	Wpływ na biznes — dane assetu	Brak pola na `Product` — nowe.
-Public Well-being / Safety Impact (asset)	Minimal / Material / Irreversible	Wpływ na bezpieczeństwo — dane assetu	Brak pola na `Product` — nowe.
+Punkt decyzyjny	Wartości (uwaga: `org_custom_v1` używa własnych, patrz niżej)	Źródło	Stan 2026-11-10 (branch `feature/ssvc-engine`)
+Exploitation	None / PoC / Active	CISA KEV, EPSS (próg konfigurowalny), CISA Vulnrichment, publiczne exploity, ręczny override	**Gotowe**: `derive_exploitation()` mapuje `known_exploited=True→Active`; EPSS ≥ próg (domyślnie 0.1, nadpisywalny `DD_SSVC_EPSS_POC_THRESHOLD`, czytany bezpośrednio z env w `dojo/ssvc/services.py` — nie w `settings.dist.py`, zgodnie z §13 minimalną integracją) → `PoC`; CVE+brak KEV/EPSS poniżej progu→`None` (realne); brak CVE→konserwatywne `Active`+`needs_review` (nie `None` cicho). Zweryfikowane na realnych danych KEV/EPSS (katalog CISA KEV + FIRST EPSS API) na próbce 20 findingów z importu Wazuh.
+Automatable	No / Yes	CISA Vulnrichment; heurystyka z wektora CVSS (AV:N, AC:L, PR:N, UI:N); ręcznie dla findings bez CVE	**Gotowe**: `derive_automatable()`, heurystyka CVSSv3 dokładnie jak w kolumnie "Źródło". Brak wektora → konserwatywne `Yes`+`needs_review`. Nie pole na `Finding` — liczone w locie.
+Technical Impact	Partial / Total	CISA Vulnrichment; CVSS (C/I/A), CWE; ręcznie	**Gotowe (częściowo)**: `derive_technical_impact()`, heurystyka z C/I/A CVSSv3 (którykolwiek High→Total). CWE jako wejście — nie zaimplementowane (CLAUDE.md nie dawał konkretnej reguły mapowania).
+Exposure (asset)	`local`/`controlled`/`open` (org_custom_v1; odpowiednik Small/Controlled/Open)	Dane assetu (`Product`) — wprowadza użytkownik	**Gotowe**: `Product.ssvc_exposure` (+ dziedziczenie z `Product_Type`, + domyślny `open`).
+Mission Impact (asset)	`minimal`/`supportive`/`critical`	Wpływ na biznes — dane assetu	**Gotowe**: `Product.ssvc_mission_impact` (domyślny `critical` — konserwatywnie, nie "Essential" z pierwotnego nazewnictwa).
+Safety Impact (asset)	`none`/`significant`/`major`	Wpływ na bezpieczeństwo — dane assetu	**Gotowe**: `Product.ssvc_safety_impact` (domyślny `major`). Nazewnictwo wartości dla tych 3 punktów pochodzi z `dojo/ssvc/tree_source.md`, nie z generycznej specyfikacji SSVC wyżej — przy pracy nad UI/API używaj kodów z `dojo/ssvc/constants.py`, nie z tej tabeli.
 Nazewnictwo punktów i dozwolone wartości muszą zgadzać się ze specyfikacją wybranego drzewa. W UI (szablony Django) używaj polskich opisów z tooltipem wyjaśniającym każdą wartość i przykładem — i18n w DefectDojo nie była sprawdzona w tym przeglądzie, zweryfikuj zanim zakładasz jej istnienie.
 
-6.3 Dane o systemach (Asset context = `Product`)
-`Product` wymaga nowych, obowiązkowych, edytowalnych atrybutów: ekspozycja, wpływ na biznes, wpływ na bezpieczeństwo (żadnego z nich nie ma dzisiaj). Wymagania:
-Atrybuty mają wartości domyślne konserwatywne (np. Exposure=Open dla assetów bez danych) i flagę „niezweryfikowane", widoczną na decyzji SSVC.
-Możliwy import masowy (CSV/CMDB API) i dziedziczenie z `Product_Type` → `Product` (istniejąca hierarchia — użyj jej, nie wymyślaj nowej "Produkt → Asset").
-Zmiana atrybutu `Product` automatycznie kolejkuje przeliczenie SSVC dla jego otwartych findings (Celery task — broker już jest, Valkey).
-Historia zmian atrybutów w `dojo/auditlog/` (istniejący audyt), nie nowy mechanizm.
-6.4 Findings bez CVE (SAST/DAST/pentest)
+6.3 Dane o systemach (Asset context = `Product`) — stan 2026-11-10
+`Product` wymaga nowych, obowiązkowych, edytowalnych atrybutów: ekspozycja, wpływ na biznes, wpływ na bezpieczeństwo. Wymagania i ich stan:
+✅ Wartości domyślne konserwatywne (Exposure=`open`, Mission Impact=`critical`, Safety Impact=`major`) i flaga „niezweryfikowane" (`Product.ssvc_context_verified`) — **wpływa realnie na decyzję**: `not ssvc_context_verified` wchodzi do `needs_review` na `SSVCDecision`, nie tylko widnieje na `Product`.
+✅ Dziedziczenie z `Product_Type` → `Product` (`Product.ssvc_asset_context()` / `effective_ssvc_*`).
+❌ Import masowy (CSV/CMDB API) — nie zrobione.
+❌ Zmiana atrybutu `Product` kolejkująca przeliczenie SSVC (Celery) — nie zrobione. `dojo.ssvc.services.compute_and_record(finding)` jest gotowym synchronicznym entry-pointem, ale nic go jeszcze nie wywołuje automatycznie (brak signal/task).
+✅ Historia zmian w `dojo/auditlog/` — automatyczna, `Product`/`Product_Type` są już pod `pghistory.track(..., AnyChange(...))`, nowe pola nie wymagały żadnej dodatkowej rejestracji.
+6.4 Findings bez CVE (SAST/DAST/pentest) — stan 2026-11-10
 Dla Semgrep/Burp/Nuclei/pentest brak KEV/EPSS. Zasady: Exploitation i Automatable domyślnie z reguł mapowania (np. potwierdzony exploit w pentestcie = PoC/Active; Nuclei z potwierdzoną odpowiedzią = PoC), Technical Impact z `Finding.cwe` lub ręcznie przez pentestera/triagera. Brak danych → wartość konserwatywna + flaga „do uzupełnienia", nigdy ciche pominięcie.
-6.5 Przeliczanie
+✅ Zasada "konserwatywna wartość + flaga, nigdy ciche pominięcie" zaimplementowana dla Exploitation/Automatable/Technical Impact (`dojo/ssvc/services.py`, `needs_review`).
+❌ Konkretne reguły mapowania per narzędzie (potwierdzony exploit w pentestcie, potwierdzona odpowiedź Nuclei, CWE→Technical Impact) — NIE zaimplementowane, bo CLAUDE.md nie dawał konkretnej, sprawdzalnej reguły do wdrożenia (tylko przykłady). Nie zgadywano tych reguł — zamiast tego konserwatywny fallback. Jeśli potrzebne, sprecyzuj reguły tutaj przed implementacją.
+6.5 Przeliczanie — stan 2026-11-10
 Wyzwalacze: nowy finding, zmiana atrybutów `Product`, aktualizacja KEV/EPSS/Vulnrichment, zmiana wersji drzewa, wygaśnięcie override'u. Przeliczanie jest asynchroniczne (Celery), idempotentne i zapisuje nowy rekord `SSVCDecision` tylko gdy wynik lub wejścia się zmieniły. Zmiana decyzji na wyższą kategorię generuje powiadomienie.
+✅ Idempotentność zaimplementowana: `compute_and_record()` porównuje z najnowszym `SSVCDecision` dla findingu i zapisuje nowy rekord tylko gdy coś się zmieniło.
+❌ Żaden z wyzwalaczy nie jest jeszcze podłączony (brak Celery task/signal). ❌ Powiadomienie o eskalacji — nie zaimplementowane, system notyfikacji DefectDojo nie był jeszcze przeglądany pod tym kątem.
+❌ Ręczny override punktu decyzyjnego (§6.1) — nie zaimplementowany. Planowany jako osobny model (override jest wejściem do NASTĘPNEJ ewaluacji, nie polem na już policzonej `SSVCDecision`), nie jako pole na `SSVCDecision`.
 
 7. Wzbogacanie (enrichment)
 Źródła: NVD API 2.0 (z kluczem API i rate limitingiem), CVE.org/cvelistV5 (+ Vulnrichment), CISA KEV, FIRST EPSS, OSV, GitHub Advisory DB, endoflife.date (wykrywanie EOL komponentów u klientów/assetów).
@@ -154,7 +161,7 @@ Commity: Conventional Commits. PR: mały, z testami, z aktualizacją docs/ADR gd
 
 10. Testowanie
 Piramida: unit (silnik SSVC, parsery, dedup) → integracyjne (DB, Celery, API) → E2E (kluczowe ścieżki: import → finding → decyzja SSVC). Framework istniejący: `unittests/` + `run-unittest.sh` (`./docker/setEnv.sh dev` wymagany najpierw) — trzymaj się go dla nowych testów, nie wprowadzaj równoległego runnera.
-Silnik SSVC: testy tabelaryczne obejmujące każdą ścieżkę drzewa (kompletność: każda kombinacja wartości daje decyzję), + testy property-based (Hypothesis) na monotoniczność tam, gdzie specyfikacja ją gwarantuje.
+Silnik SSVC: testy tabelaryczne obejmujące każdą ścieżkę drzewa (kompletność: każda kombinacja wartości daje decyzję) — **gotowe** (`unittests/ssvc/test_engine.py`, 108/108 liści `org_custom_v1`). Testy property-based (Hypothesis) na monotoniczność — **odłożone**: Hypothesis nie jest obecną zależnością, wymaga ADR przed dodaniem (§2); exhaustywny test tabelaryczny już i tak daje 100% pokrycie drzewa.
 Parsery: golden-file wg konwencji `unittests/test_parsers.py` (0/1/many) + fuzzing na uszkodzonych wejściach (nie może być wyjątku bez obsługi ani zawieszenia).
 Testy wydajnościowe importu: CI ma już `performance-tests.yml` — sprawdź zakres przed dopisywaniem nowego.
 Dane testowe zawsze zanonimizowane; nigdy prawdziwe skany klientów w repo.
@@ -173,8 +180,8 @@ helm lint helm/defectdojo             # chart już istnieje w repo
 12. Kolejność prac (MVP → dalej, zrewidowana pod fork)
 ADR-0001 (ten plik + decyzja fork vs. greenfield) — gotowe. Audyt EOL całego forka (nie tylko nowych zależności) — sprawdź wersje w requirements*.txt, Dockerfile*, helm/ pod kątem EOL.
 Neutralizacja ryzyka upstream: `upstream` push=DISABLE (gotowe), baner w AGENTS.md (gotowe). Zweryfikuj realny stan SSO/OIDC (§3) przed pracą nad RBAC.
-Model `Product` + nowe atrybuty SSVC (ekspozycja, wpływ biznes/bezpieczeństwo) w `dojo/product/`, z wartościami domyślnymi i flagą niezweryfikowane.
-Silnik SSVC (`dojo/ssvc/`) + drzewa CISA/Deployer jako dane, proweniencja, override, przeliczanie — podłączony pod istniejące pola `Finding` (`cvssv3`, `cwe`, `known_exploited`, `epss_score`).
+✅ Model `Product` (+ `Product_Type`) + nowe atrybuty SSVC (ekspozycja, wpływ biznes/bezpieczeństwo) w `dojo/product/`, z wartościami domyślnymi i flagą niezweryfikowane. **Gotowe na branchu `feature/ssvc-engine`** (2026-11-10, niezmergowany do `master`).
+🟡 Silnik SSVC (`dojo/ssvc/`) + drzewo jako dane (`org_custom_v1`, nie oficjalne CISA/Deployer — własny wariant z `tree_source.md`), podłączony pod istniejące pola `Finding` (`cvssv3`, `known_exploited`). **Gotowe: silnik, `SSVCDecision`, heurystyki, idempotentny zapis.** Nie zrobione: proweniencja na poziomie override'u (sam override nie istnieje), Celery recalculation, powiadomienia. Zob. §6.3–6.5 dla szczegółów stanu.
 CI bezpieczeństwa własnego projektu (Trivy, Semgrep, SBOM, pip-audit, gitleaks) — brakuje, dodać jako nowe workflow.
 Weryfikacja/rozszerzenie istniejących parserów pod kątem brakujących formatów (dedykowany Nessus, Rapid7 Nexpose/InsightVM) — dopiero po silniku SSVC, bo większość formatów z §5.1 już jest.
 Customowe raporty pentesterów (szablon, formularz, API) — rozszerzenie istniejącego ręcznego tworzenia findingów.
@@ -184,6 +191,7 @@ Hardening, wydajność, dokumentacja operacyjna, Helm (chart już istnieje — d
 13. Zasady pracy dla Claude
 Przed dodaniem zależności: sprawdź kryteria z §2 (wiek, aktywność, społeczność, EOL, licencja) i napisz ADR. Jeśli nie możesz zweryfikować aktualnego statusu wsparcia — powiedz to wprost zamiast zgadywać.
 **Przed napisaniem nowego kodu dla funkcji, która "brzmi jak coś, co DefectDojo pewnie już ma" — sprawdź `dojo/` najpierw.** To jest fork dojrzałego, 16-tysiąc-commitowego projektu; duplikowanie istniejącej logiki (dedup, cykl życia findings, RBAC, audyt, risk acceptance) jest błędem, nie ostrożnością.
+**Minimalna integracja w gotowe rozwiązania.** Nowa funkcjonalność w tym forku ma w pierwszej kolejności powstawać jako nowy moduł domenowy (`dojo/<nowa-domena>/`, konwencja z §4), nie jako zmiana istniejących plików DefectDojo. Zmiana istniejącego pliku jest dopuszczalna tylko gdy nie da się tego obejść (nowe pole na istniejącym modelu, re-export w `dojo/models.py`, wpis w routingu) — i musi być: (1) czysto addytywna, bez usuwania lub przepisywania istniejącej linii; jeśli zadanie wymaga zmienić/usunąć istniejącą linię DefectDojo, zatrzymaj się i zapytaj użytkownika, zamiast decydować o tym samodzielnie; (2) odnotowana w `DEFECTDOJO_MODIFICATIONS.md` (plik, dokładna zmiana, przyczyna, commit). Cel: merge z `upstream` ma generować jak najmniej konfliktów, a zakres ingerencji w gotowy kod ma być w każdej chwili audytowalny jednym plikiem, nie wykopywaniem z `git log`.
 Nie wymyślaj struktury formatów narzędzi z pamięci: sprawdź dokumentację/realne próbki i dodaj fixture — a dla formatów, które DefectDojo już parsuje, przeczytaj istniejący parser w `dojo/tools/<nazwa>/` przed pisaniem czegokolwiek nowego.
 Nie upraszczaj SSVC do jednej liczby/score'u (np. samego CVSS). CVSS i EPSS są wejściami, nie wynikiem.
 Nie dodawaj telemetrii ani zewnętrznych wywołań wysyłających dane klienta.

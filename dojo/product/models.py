@@ -13,6 +13,7 @@ from django_tagulous.models import TagField
 
 from dojo.base_models.base import BaseManager, BaseModel
 from dojo.query_hooks import HookedBaseManager, HookedManager, UnfilteredManager
+from dojo.ssvc import constants as ssvc_constants
 
 
 class Product_Line(models.Model):
@@ -115,6 +116,34 @@ class Product(BaseModel):
     internet_accessible = models.BooleanField(default=False, help_text=_("Specify if the application is accessible from the public internet."))
     regulations = models.ManyToManyField("dojo.Regulation", blank=True)
 
+    # Kontekst assetu dla silnika SSVC (dojo.ssvc). Puste (None) = brak
+    # jawnej wartości na tym Produkcie — effective_ssvc_* spada na
+    # Product_Type, a potem na konserwatywny domyślny (dojo.ssvc.constants).
+    # Patrz CLAUDE.md §6.3.
+    ssvc_exposure = models.CharField(
+        max_length=10, choices=[(v, _(label)) for v, label in ssvc_constants.EXPOSURE_CHOICES],
+        null=True, blank=True,
+        verbose_name=_("Ekspozycja sieciowa (SSVC)"),
+        help_text=_("Dostępność usługi z sieci — wejście do silnika SSVC. Puste = dziedzicz z typu produktu, "
+                    "potem konserwatywny domyślny (Otwarta)."))
+    ssvc_mission_impact = models.CharField(
+        max_length=10, choices=[(v, _(label)) for v, label in ssvc_constants.MISSION_IMPACT_CHOICES],
+        null=True, blank=True,
+        verbose_name=_("Wpływ na misję (SSVC)"),
+        help_text=_("W jakim stopniu ten system jest ważny dla realizacji zadań organizacji. Puste = dziedzicz "
+                    "z typu produktu, potem konserwatywny domyślny (Kluczowy)."))
+    ssvc_safety_impact = models.CharField(
+        max_length=11, choices=[(v, _(label)) for v, label in ssvc_constants.SAFETY_IMPACT_CHOICES],
+        null=True, blank=True,
+        verbose_name=_("Wpływ na bezpieczeństwo (SSVC)"),
+        help_text=_("Wpływ podatności w tym systemie na bezpieczeństwo ludzi. Puste = dziedzicz z typu produktu, "
+                    "potem konserwatywny domyślny (Istotny)."))
+    ssvc_context_verified = models.BooleanField(
+        default=False,
+        verbose_name=_("Kontekst SSVC zweryfikowany"),
+        help_text=_("Odznacz, dopóki ekspozycja/wpływ na misję/wpływ na bezpieczeństwo nie zostały potwierdzone "
+                    "przez człowieka — decyzje SSVC dla tego produktu pokazują wtedy ostrzeżenie."))
+
     tags = TagField(blank=True, force_lowercase=True, help_text=_("Add tags that help describe this product. Choose from the list or add new tags. Press Enter key to add."))
     enable_product_tag_inheritance = models.BooleanField(
         default=False,
@@ -206,6 +235,65 @@ class Product(BaseModel):
 
     def get_absolute_url(self):
         return reverse("view_product", args=[str(self.id)])
+
+    def _resolve_ssvc_field(self, field_name, default):
+        """
+        (wartość, źródło) dla jednego pola SSVC: ten Produkt -> jego Product_Type ->
+        konserwatywny domyślny. źródło to "product"/"product_type"/"default" — potrzebne
+        do proweniencji w SSVCDecision.provenance (dojo.ssvc.services), nie tylko do
+        samej wartości.
+        """
+        own = getattr(self, field_name)
+        if own:
+            return own, "product"
+        if self.prod_type_id:
+            inherited = getattr(self.prod_type, field_name)
+            if inherited:
+                return inherited, "product_type"
+        return default, "default"
+
+    @property
+    def effective_ssvc_exposure(self):
+        return self._resolve_ssvc_field("ssvc_exposure", ssvc_constants.EXPOSURE_DEFAULT)[0]
+
+    @property
+    def effective_ssvc_exposure_source(self):
+        return self._resolve_ssvc_field("ssvc_exposure", ssvc_constants.EXPOSURE_DEFAULT)[1]
+
+    @property
+    def effective_ssvc_mission_impact(self):
+        return self._resolve_ssvc_field("ssvc_mission_impact", ssvc_constants.MISSION_IMPACT_DEFAULT)[0]
+
+    @property
+    def effective_ssvc_mission_impact_source(self):
+        return self._resolve_ssvc_field("ssvc_mission_impact", ssvc_constants.MISSION_IMPACT_DEFAULT)[1]
+
+    @property
+    def effective_ssvc_safety_impact(self):
+        return self._resolve_ssvc_field("ssvc_safety_impact", ssvc_constants.SAFETY_IMPACT_DEFAULT)[0]
+
+    @property
+    def effective_ssvc_safety_impact_source(self):
+        return self._resolve_ssvc_field("ssvc_safety_impact", ssvc_constants.SAFETY_IMPACT_DEFAULT)[1]
+
+    def ssvc_asset_context(self):
+        """
+        All three (value, source) resolutions in one call — each field
+        resolved exactly once. dojo.ssvc.services.build_finding_inputs()
+        uses this instead of the six effective_ssvc_*/_source properties
+        above (which each independently re-run _resolve_ssvc_field; fine
+        for a one-off read, wasteful at Celery-recalculation scale).
+        """
+        exposure, exposure_source = self._resolve_ssvc_field("ssvc_exposure", ssvc_constants.EXPOSURE_DEFAULT)
+        mission_impact, mission_impact_source = self._resolve_ssvc_field(
+            "ssvc_mission_impact", ssvc_constants.MISSION_IMPACT_DEFAULT)
+        safety_impact, safety_impact_source = self._resolve_ssvc_field(
+            "ssvc_safety_impact", ssvc_constants.SAFETY_IMPACT_DEFAULT)
+        return {
+            "exposure": exposure, "exposure_source": exposure_source,
+            "mission_impact": mission_impact, "mission_impact_source": mission_impact_source,
+            "safety_impact": safety_impact, "safety_impact_source": safety_impact_source,
+        }
 
     @cached_property
     def findings_count(self):

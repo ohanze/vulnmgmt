@@ -533,6 +533,7 @@ from dojo.notifications.models import (  # noqa: E402, F401  -- backward compat
     Notifications,
 )
 from dojo.risk_acceptance.models import Risk_Acceptance  # noqa: E402, F401 -- re-export
+from dojo.ssvc.models import SSVCDecision  # noqa: E402, F401 -- re-export
 from dojo.tool_product.models import Tool_Product_History, Tool_Product_Settings  # noqa: E402, F401 -- re-export
 
 

@@ -1,0 +1,184 @@
+# Drzewo decyzyjne SSVC (wariant organizacyjny, oparty na CERT/CC SSVC v2,
+# uproszczony: Automatable i Technical Impact są użyte jako surowe osie
+# drzewa, bez łączenia ich w pośredni punkt "Utility" ze specyfikacji
+# oficjalnej). Źródło: dojo/ssvc/tree_source.md (ten plik jest jego
+# dosłownym zapisem jako danych — przy rozbieżności tree_source.md jest
+# źródłem prawdy).
+#
+# Zmiana tego pliku NIE przepisuje historii: dojo/ssvc/services.py zapisuje
+# `tree_id` + `version` na każdej SSVCDecision, więc stara decyzja zawsze
+# wskazuje na drzewo, którym została policzona.
+id: org_custom
+version: "1"
+title_pl: "Priorytet obsługi podatności"
+
+decision_points:
+  exploitation:
+    label_pl: "Eksploatacja podatności"
+    values: [none, poc, active]
+    value_labels_pl:
+      none: "Brak"
+      poc: "Publiczny PoC"
+      active: "Aktywna"
+    value_descriptions_pl:
+      none: "Brak dowodów eksploitacji."
+      poc: "Publiczny kod lub szczegółowy opis metody eksploitacji."
+      active: "Wiarygodne informacje na temat aktywnego wykorzystywania podatności."
+
+  automatable:
+    label_pl: "Możliwość automatyzacji"
+    values: ["no", "yes"]
+    value_labels_pl:
+      "no": "Nie"
+      "yes": "Tak"
+    value_descriptions_pl:
+      "no": "Atakujący nie może w pełni zautomatyzować rozpoznania, wykorzystania i przejęcia."
+      "yes": "Atakujący może zautomatyzować rozpoznanie, wykorzystanie i przejęcie bez interakcji użytkownika."
+
+  technical_impact:
+    label_pl: "Wpływ techniczny"
+    values: [partial, total]
+    value_labels_pl:
+      partial: "Częściowy"
+      total: "Całkowity"
+    value_descriptions_pl:
+      partial: "Atakujący zdobywa ograniczoną kontrolę lub ograniczony dostęp do informacji."
+      total: "Atakujący zdobywa pełną kontrolę nad komponentem lub pełne ujawnienie jego informacji."
+
+  exposure:
+    label_pl: "Ekspozycja sieciowa"
+    values: [local, controlled, open]
+    value_labels_pl:
+      local: "Lokalna"
+      controlled: "Kontrolowana"
+      open: "Otwarta"
+    value_descriptions_pl:
+      local: "Usługa osiągalna tylko lokalnie; nieosiągalna z sieci biurowej, bez dostępu do Internetu."
+      controlled: "Dostęp sieciowy ograniczony technicznie (odrębny segment, VPN, reguły firewall)."
+      open: "Dostęp z Internetu, DMZ lub z sieci niezaufanej."
+
+  mission_impact:
+    label_pl: "Wpływ na misję"
+    values: [minimal, supportive, critical]
+    value_labels_pl:
+      minimal: "Minimalny"
+      supportive: "Wspomagający"
+      critical: "Kluczowy"
+    value_descriptions_pl:
+      minimal: "System nie wspiera kluczowych procesów — jego awaria jest niekomfortowa, ale nie utrudnia realizacji głównych zadań organizacji."
+      supportive: "System pomaga w realizacji kluczowych procesów, ale można je wykonać także innymi metodami, choć wolniej lub mniej wygodnie."
+      critical: "System jest niezbędny do realizacji podstawowych zadań organizacji — jego awaria powoduje zatrzymanie lub poważne zakłócenie działalności."
+
+  safety_impact:
+    label_pl: "Wpływ na bezpieczeństwo"
+    values: [none, significant, major]
+    value_labels_pl:
+      none: "Brak"
+      significant: "Znaczący"
+      major: "Istotny"
+    value_descriptions_pl:
+      none: "Brak wpływu na bezpieczeństwo."
+      significant: "Wpływ pośredni lub nieustalony."
+      major: "Wpływ bezpośredni."
+
+# Punkt pochodny: "Istotność systemu dla organizacji" = f(mission_impact, safety_impact).
+# Tabela 1:1 z tree_source.md (sekcja 8).
+mission_criticality_matrix:
+  minimal:    {none: low,    significant: medium, major: high}
+  supportive: {none: medium, significant: high,   major: high}
+  critical:   {none: high,   significant: high,   major: high}
+
+# Wyniki — kody M/M*/OP/ND z tree_source.md zmapowane na angielskie identyfikatory
+# zgodne z nazewnictwem SSVC Deployer (Defer/Scheduled/Out-of-cycle/Immediate,
+# CLAUDE.md §6.1), bo to ten sam 4-poziomowy wzorzec eskalacji. Etykieta PL
+# jest cytatem z legendy tree_source.md, nie tłumaczeniem z powrotem.
+outcomes:
+  defer:
+    code: "M"
+    label_pl: "Monitorowanie"
+  scheduled:
+    code: "M*"
+    label_pl: "Monitorowanie*"
+  out_of_cycle:
+    code: "OP"
+    label_pl: "Obsługa priorytetowa"
+  immediate:
+    code: "ND"
+    label_pl: "Natychmiastowe działanie"
+
+# Pełne drzewo postępowania — 36 kombinacji (exploitation × automatable ×
+# technical_impact × exposure), każda z wynikiem per poziom istotności
+# systemu (low/medium/high). Transkrypcja 1:1 z tabeli w tree_source.md.
+decision_table:
+  - when: {exploitation: none, automatable: "no", technical_impact: partial, exposure: local}
+    outcomes: {low: defer, medium: defer, high: defer}
+  - when: {exploitation: none, automatable: "no", technical_impact: partial, exposure: controlled}
+    outcomes: {low: defer, medium: defer, high: defer}
+  - when: {exploitation: none, automatable: "no", technical_impact: partial, exposure: open}
+    outcomes: {low: scheduled, medium: scheduled, high: scheduled}
+  - when: {exploitation: none, automatable: "no", technical_impact: total, exposure: local}
+    outcomes: {low: defer, medium: defer, high: defer}
+  - when: {exploitation: none, automatable: "no", technical_impact: total, exposure: controlled}
+    outcomes: {low: defer, medium: defer, high: scheduled}
+  - when: {exploitation: none, automatable: "no", technical_impact: total, exposure: open}
+    outcomes: {low: scheduled, medium: scheduled, high: out_of_cycle}
+  - when: {exploitation: none, automatable: "yes", technical_impact: partial, exposure: local}
+    outcomes: {low: defer, medium: defer, high: scheduled}
+  - when: {exploitation: none, automatable: "yes", technical_impact: partial, exposure: controlled}
+    outcomes: {low: defer, medium: defer, high: out_of_cycle}
+  - when: {exploitation: none, automatable: "yes", technical_impact: partial, exposure: open}
+    outcomes: {low: scheduled, medium: scheduled, high: out_of_cycle}
+  - when: {exploitation: none, automatable: "yes", technical_impact: total, exposure: local}
+    outcomes: {low: defer, medium: defer, high: scheduled}
+  - when: {exploitation: none, automatable: "yes", technical_impact: total, exposure: controlled}
+    outcomes: {low: defer, medium: defer, high: out_of_cycle}
+  - when: {exploitation: none, automatable: "yes", technical_impact: total, exposure: open}
+    outcomes: {low: scheduled, medium: scheduled, high: out_of_cycle}
+  - when: {exploitation: poc, automatable: "no", technical_impact: partial, exposure: local}
+    outcomes: {low: defer, medium: defer, high: defer}
+  - when: {exploitation: poc, automatable: "no", technical_impact: partial, exposure: controlled}
+    outcomes: {low: defer, medium: defer, high: scheduled}
+  - when: {exploitation: poc, automatable: "no", technical_impact: partial, exposure: open}
+    outcomes: {low: scheduled, medium: scheduled, high: out_of_cycle}
+  - when: {exploitation: poc, automatable: "no", technical_impact: total, exposure: local}
+    outcomes: {low: defer, medium: defer, high: scheduled}
+  - when: {exploitation: poc, automatable: "no", technical_impact: total, exposure: controlled}
+    outcomes: {low: defer, medium: scheduled, high: out_of_cycle}
+  - when: {exploitation: poc, automatable: "no", technical_impact: total, exposure: open}
+    outcomes: {low: scheduled, medium: out_of_cycle, high: immediate}
+  - when: {exploitation: poc, automatable: "yes", technical_impact: partial, exposure: local}
+    outcomes: {low: defer, medium: defer, high: scheduled}
+  - when: {exploitation: poc, automatable: "yes", technical_impact: partial, exposure: controlled}
+    outcomes: {low: defer, medium: defer, high: out_of_cycle}
+  - when: {exploitation: poc, automatable: "yes", technical_impact: partial, exposure: open}
+    outcomes: {low: scheduled, medium: scheduled, high: immediate}
+  - when: {exploitation: poc, automatable: "yes", technical_impact: total, exposure: local}
+    outcomes: {low: defer, medium: defer, high: scheduled}
+  - when: {exploitation: poc, automatable: "yes", technical_impact: total, exposure: controlled}
+    outcomes: {low: defer, medium: scheduled, high: out_of_cycle}
+  - when: {exploitation: poc, automatable: "yes", technical_impact: total, exposure: open}
+    outcomes: {low: scheduled, medium: out_of_cycle, high: immediate}
+  - when: {exploitation: active, automatable: "no", technical_impact: partial, exposure: local}
+    outcomes: {low: scheduled, medium: scheduled, high: scheduled}
+  - when: {exploitation: active, automatable: "no", technical_impact: partial, exposure: controlled}
+    outcomes: {low: scheduled, medium: scheduled, high: out_of_cycle}
+  - when: {exploitation: active, automatable: "no", technical_impact: partial, exposure: open}
+    outcomes: {low: scheduled, medium: scheduled, high: immediate}
+  - when: {exploitation: active, automatable: "no", technical_impact: total, exposure: local}
+    outcomes: {low: scheduled, medium: scheduled, high: out_of_cycle}
+  - when: {exploitation: active, automatable: "no", technical_impact: total, exposure: controlled}
+    outcomes: {low: scheduled, medium: out_of_cycle, high: immediate}
+  - when: {exploitation: active, automatable: "no", technical_impact: total, exposure: open}
+    outcomes: {low: scheduled, medium: immediate, high: immediate}
+  - when: {exploitation: active, automatable: "yes", technical_impact: partial, exposure: local}
+    outcomes: {low: scheduled, medium: scheduled, high: out_of_cycle}
+  - when: {exploitation: active, automatable: "yes", technical_impact: partial, exposure: controlled}
+    outcomes: {low: out_of_cycle, medium: out_of_cycle, high: immediate}
+  - when: {exploitation: active, automatable: "yes", technical_impact: partial, exposure: open}
+    outcomes: {low: immediate, medium: immediate, high: immediate}
+  - when: {exploitation: active, automatable: "yes", technical_impact: total, exposure: local}
+    outcomes: {low: scheduled, medium: out_of_cycle, high: out_of_cycle}
+  - when: {exploitation: active, automatable: "yes", technical_impact: total, exposure: controlled}
+    outcomes: {low: out_of_cycle, medium: immediate, high: immediate}
+  - when: {exploitation: active, automatable: "yes", technical_impact: total, exposure: open}
+    outcomes: {low: immediate, medium: immediate, high: immediate}
