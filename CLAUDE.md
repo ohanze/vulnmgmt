@@ -132,6 +132,7 @@ Dla Semgrep/Burp/Nuclei/pentest brak KEV/EPSS. Zasady: Exploitation i Automatabl
 Wyzwalacze: nowy finding, zmiana atrybutów `Product`, aktualizacja KEV/EPSS/Vulnrichment, zmiana wersji drzewa, wygaśnięcie override'u. Przeliczanie jest asynchroniczne (Celery), idempotentne i zapisuje nowy rekord `SSVCDecision` tylko gdy wynik lub wejścia się zmieniły. Zmiana decyzji na wyższą kategorię generuje powiadomienie.
 ✅ Idempotentność zaimplementowana: `compute_and_record()` porównuje z najnowszym `SSVCDecision` dla findingu i zapisuje nowy rekord tylko gdy coś się zmieniło.
 ❌ Żaden z wyzwalaczy nie jest jeszcze podłączony (brak Celery task/signal). ❌ Powiadomienie o eskalacji — nie zaimplementowane, system notyfikacji DefectDojo nie był jeszcze przeglądany pod tym kątem.
+✅ Ręczne, masowe przeliczenie: `python manage.py ssvc_recompute` (`dojo/management/commands/ssvc_recompute.py`) iteruje po `Finding.objects.all()` (opcjonalnie `--finding-id`/`--product-id`/`--tree-id`/`--dry-run`) i woła `compute_and_record()` per finding — to NIE jest wyzwalacz automatyczny z listy wyżej, tylko ręczny substytut, dopóki Celery nie jest podłączony. Testy: `unittests/ssvc/test_recompute_command.py`.
 ❌ Ręczny override punktu decyzyjnego (§6.1) — nie zaimplementowany. Planowany jako osobny model (override jest wejściem do NASTĘPNEJ ewaluacji, nie polem na już policzonej `SSVCDecision`), nie jako pole na `SSVCDecision`.
 
 7. Wzbogacanie (enrichment)
