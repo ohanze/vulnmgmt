@@ -83,6 +83,26 @@ skutek dodania pól wyżej, nie ręczna ingerencja w logikę audytu.
 
 ---
 
+## `dojo/vulnerability/models.py`
+
+**Zmiana:** +2 linie — import `from dojo.validators import cvss3_validator` oraz jedno nowe
+pole na `Vulnerability`: `cvssv3_vector` (`TextField`, nullable, `validators=[cvss3_validator]`,
+ten sam walidator, który już chroni `Finding.cvssv3`).
+
+**Dlaczego:** CLAUDE.md §7 wymaga wzbogacania wektorem CVSS z NVD API 2.0. `Vulnerability` to
+istniejący w DefectDojo globalny rejestr per-CVE (opisany we własnym docstringu jako "(future)
+enrichment registry", z już istniejącymi kolumnami `epss_score`/`known_exploited`/`kev_date`/
+`enrichment_updated` czekającymi na wypełnienie) — brakowało mu tylko kolumny na CVSS, bo
+wcześniej nic go nie zapisywało. Nowy moduł `dojo/vuln_enrichment/` (dodatek, nie modyfikacja)
+wypełnia wszystkie te kolumny i projektuje wynik na `Finding.epss_score`/`known_exploited`/
+`kev_date`/`cvssv3` (już istniejące pola `Finding`, zero zmian w `dojo/finding/models.py`).
+
+**Addytywne:** Tak — zero zmian w istniejących polach/metodach `Vulnerability`.
+
+**Commit:** (ten branch, `feature/ssvc-enrichment`)
+
+---
+
 ## Czego NIE dotknięto
 
 Dla jasności zakresu: żadne zmiany w widokach, serializerach DRF, szablonach,
