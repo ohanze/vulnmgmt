@@ -168,6 +168,33 @@ class TestEnrichVulnerabilities(DojoTestCase):
         self.vuln_kev.refresh_from_db()
         self.assertIsNone(self.vuln_kev.epss_score)
 
+    def test_cvss_result_is_persisted_before_the_next_cve_is_fetched(self):
+        """
+        A multi-hour NVD run must not lose everything fetched so far if it's interrupted:
+        each CVE's vector is written to the DB as soon as it's fetched, not batched until the
+        end. Proven here by having the *second* CVE's fetch look up the *first* CVE's row and
+        assert it is already persisted.
+        """
+        vuln2 = Vulnerability.objects.create(vulnerability_id="CVE-2026-3", vulnerability_id_type="CVE")
+        observed = {}
+
+        def fake_fetch(cve_id):
+            if cve_id == "CVE-2026-3":
+                observed["vuln1_vector_seen_in_db"] = Vulnerability.objects.get(
+                    vulnerability_id="CVE-2026-1",
+                ).cvssv3_vector
+                return None
+            return "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+
+        with mock.patch(f"{MODULE}.fetch_nvd_cvss_vector", side_effect=fake_fetch), \
+             mock.patch(f"{MODULE}.time.sleep"):
+            enrichment_services.enrich_vulnerabilities([self.vuln_kev, vuln2], sources=frozenset({"cvss"}))
+
+        self.assertEqual(
+            observed["vuln1_vector_seen_in_db"],
+            "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+        )
+
     @mock.patch(f"{MODULE}.fetch_nvd_cvss_vector")
     def test_cvss_skips_vulnerabilities_that_already_have_a_vector_unless_forced(self, mock_cvss):
         self.vuln_kev.cvssv3_vector = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:L"

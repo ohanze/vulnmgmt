@@ -226,8 +226,17 @@ def enrich_vulnerabilities(
     cvss_vectors: dict[str, str] = {}
     cvss_error: str | None = None
     if "cvss" in sources:
+        from django.utils import timezone  # noqa: PLC0415 -- lazy import, see module docstring
+
         report["cvss"]["attempted"] = True
         due_for_cvss = vulnerabilities if force_cvss else [v for v in vulnerabilities if not v.cvssv3_vector]
+        # NVD's rate limit makes this loop the slow part of a run (thousands of CVEs can take
+        # hours at 5-50 req/30s) — write-through each result immediately (one cheap single-row
+        # UPDATE per CVE, negligible next to the multi-second NVD wait) instead of waiting for
+        # the batch bulk_update below. An interrupted run (restart, kill, crash) then loses at
+        # most the in-flight request, not hours of prior progress: due_for_cvss's own
+        # `not v.cvssv3_vector` filter already makes a plain re-run skip everything already
+        # persisted, so resuming needs no special flag or checkpoint — just run it again.
         for index, vuln in enumerate(due_for_cvss):
             try:
                 vector = fetch_nvd_cvss_vector(vuln.vulnerability_id)
@@ -237,6 +246,10 @@ def enrich_vulnerabilities(
                 continue
             if vector:
                 cvss_vectors[vuln.vulnerability_id] = vector
+                if not dry_run:
+                    Vulnerability.objects.filter(pk=vuln.pk).update(
+                        cvssv3_vector=vector, enrichment_updated=timezone.now(),
+                    )
             if index < len(due_for_cvss) - 1:
                 time.sleep(nvd_min_interval_seconds())
         report["cvss"]["error"] = cvss_error
